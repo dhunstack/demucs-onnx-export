@@ -434,17 +434,18 @@ class HTDemucs(nn.Module):
         pad = hl // 2 * 3
         x = pad1d(x, (pad, pad + le * hl - x.shape[-1]), mode="reflect")
 
-        z = spectro(x, nfft, hl)[..., :-1, :]
-        assert z.shape[-1] == le + 4, (z.shape, x.shape, le)
-        z = z[..., 2: 2 + le]
+        z = spectro(x, nfft, hl)[..., :-1, :, :]    # adding one more dimension
+        assert z.shape[-2] == le + 4, (z.shape, x.shape, le) # from -1 to -2
+        z = z[..., 2: 2 + le, :]  # adding one more dimension
+
         return z
 
-    def _ispec(self, z, length=None, scale=0):
+    def _ispec(self, z, length=None, scale=0):  # z WAS complex tensor of shape (B, S, -1, Fr, T). # (B, S, -1, Fr, T, 2) shape
         hl = self.hop_length // (4**scale)
-        z = F.pad(z, (0, 0, 0, 1))
-        z = F.pad(z, (2, 2))
+        z = F.pad(z, (0, 0, 0, 0, 0, 1))  # add 0 padding for the last dim
+        z = F.pad(z, (0, 0, 2, 2))  # add 0 padding for the last dim
         pad = hl // 2 * 3
-        le = hl * int(math.ceil(length / hl)) + 2 * pad
+        le = max(hl * int(math.ceil(length / hl)) + 2 * pad, pad + length)
         x = ispectro(z, hl, length=le)
         x = x[..., pad: pad + length]
         return x
@@ -453,11 +454,14 @@ class HTDemucs(nn.Module):
         # return the magnitude of the spectrogram, except when cac is True,
         # in which case we just move the complex dimension to the channel one.
         if self.cac:
-            B, C, Fr, T = z.shape
-            m = torch.view_as_real(z).permute(0, 1, 4, 2, 3)
-            m = m.reshape(B, C * 2, Fr, T)
+            B, C, Fr, T, dim = z.shape  # dim should be 2, adding one more dimension
+            m = z.permute(0, 1, 4, 2, 3) # torch.view_as_real(z) changed to z
+            m = m.reshape(B, C * 2, Fr, T) # this step remains the same
         else:
-            m = z.abs()
+            # m = z.abs() # TODO(DONE): this was written for tensor. Now we changed code to return 2 as last dim, so this should be updated to correctly calculate the magnitude
+            real = z[..., 0]
+            imag = z[..., 1]
+            m = torch.sqrt(real**2 + imag**2)  # for magnitude            
         return m
 
     def _mask(self, z, m):
@@ -467,8 +471,10 @@ class HTDemucs(nn.Module):
         if self.cac:
             B, S, C, Fr, T = m.shape
             out = m.view(B, S, -1, 2, Fr, T).permute(0, 1, 2, 4, 5, 3)
-            out = torch.view_as_complex(out.contiguous())
-            return out
+            # out = torch.view_as_complex(out.contiguous())  # B, S, -1, Fr, T  (complex)
+            out = out.contiguous()  # B, S, -1, Fr, T, 2 shape
+            return out     
+        # TODO: Modify all the below paths for the new shape
         if self.training:
             niters = self.end_iters
         if niters < 0:
@@ -634,7 +640,8 @@ class HTDemucs(nn.Module):
         if x_is_mps_xpu:
             x = x.cpu()
 
-        zout = self._mask(z, x)
+        # zout = self._mask(z, x)     # since cac is True, z is ignored, only x is used. zout is complex tensor # B, S, -1, Fr, T  (complex)
+        zout = self._mask(z, x)     # since cac is True, z is ignored, only x is used. zout is real 2D tensor # B, S, -1, Fr, T, 2 shape
         if self.use_train_segment:
             if self.training:
                 x = self._ispec(zout, length)

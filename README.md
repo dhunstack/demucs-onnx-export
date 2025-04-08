@@ -1,13 +1,68 @@
+# Update for ONNX Export
+
+## ONNX Export Changes in Demucs v4 (Hybrid Transformer)
+
+This document outlines the core issues and changes made to enable ONNX export of the Demucs v4 model. The focus is on removing dependencies on complex tensors, which are currently unsupported in ONNX, and restructuring parts of the model for compatibility with ONNXRuntime.
+
+---
+
+### Core Issue
+
+The primary challenge in exporting Demucs v4 to ONNX lies in the use of **complex tensors**, especially in the STFT and ISTFT operations. While **ONNX Opset 17** has support for `STFT`, it **does not support complex tensors** natively, which prevents a straightforward export.
+
+Relevant issues:
+- [ONNX Complex Tensors Tracking Issue (pytorch/pytorch#65666)](https://github.com/pytorch/pytorch/issues/65666)
+- [ONNX Complex Support in Nightly Builds (pytorch/pytorch#107677)](https://github.com/pytorch/pytorch/issues/107677)
+- [ONNX Export Error for aten::fft_fft (pytorch/pytorch#149332)](https://github.com/pytorch/pytorch/issues/149332)
+
+The `cac` (complex-as-channels) parameter in Demucs offers some workaround:
+- When `cac=False`, the magnitude is computed directly.
+- When `cac=True`, complex tensors are returned, which then need to be **manually transformed into real tensors by splitting real and imaginary components across channels**.
+
+However, the main problem persists — PyTorch's `torch.stft` returns a complex tensor by default, and `torch.istft` expects a complex tensor as input. This makes the default Demucs model incompatible with ONNX export.
+
+---
+
+### ✅ First Major Change — Modify STFT to Output Real Tensors
+
+Demucs's internal `STFT` module was modified to use `return_complex=False`.
+
+This change:
+- Forces PyTorch to output real tensors with shape `(…, 2)` where the last dimension represents `[real, imag]`.
+- Allows ONNX to treat them as regular float tensors.
+- Avoids the use of `view_as_complex()`.
+
+This substitution enables a clean ONNX export of the STFT operation without needing complex tensor support.
+
+---
+
+### ✅ Second Major Change — Remove `view_as_complex` Usage
+
+The function `torch.view_as_complex()` was used in two functions inside the model: `_wiener` and `_mask`.
+
+- `view_as_complex()` in `_wiener` is unreachable because this branch is only triggered when `cac=False`, and the model is always used with `cac=True`.
+- `view_as_complex()` in `_mask` **is active and must be removed or rewritten**.
+
+The `_mask` function was updated to operate directly on real-valued tensors with shape `(…, 2)`, without converting to complex. This ensures ONNX export compatibility.
+
+---
+
+### 🛠️ Ongoing Work
+
+While the model graph now successfully exports to ONNX using real tensors, a few final steps remain:
+
+- **Replace `aten::fft_fft`**: This operation, used internally in PyTorch for FFT, is not supported in ONNX. We are evaluating replacing it with a custom ONNX operator or external libraries like **FFTW** for deterministic behavior.
+- **Numerical Matching**: We are comparing the results of the ONNX-exported model with the original PyTorch implementation to validate the audio quality and ensure parity.
+
+---
+
+### 🧪 References & Tools
+
+- Demucs v4 GitHub: [https://github.com/adefossez/demucs](https://github.com/adefossez/demucs)
+- STFT workaround in ONNX: [https://github.com/sevagh/demucs.onnx](https://github.com/sevagh/demucs.onnx)
+- Alternative ISTFT implementation: [https://github.com/biendltb/torch-istft-onnx](https://github.com/biendltb/torch-istft-onnx)
+
 # Demucs Music Source Separation
-
-![tests badge](https://github.com/facebookresearch/demucs/workflows/tests/badge.svg)
-![linter badge](https://github.com/facebookresearch/demucs/workflows/linter/badge.svg)
-
-
-**This is the officially maintained Demucs** now that I (Alexandre Défossez) have left Meta to join [Kyutai](https://twitter.com/kyutai_labs).
-Note that I'm not actively working on Demucs anymore, so expect slow replies and no new feature for now.
-
-
 
 This is the 4th release of Demucs (v4), featuring Hybrid Transformer based source separation.
 **For the classic Hybrid Demucs (v3):** [Go this commit][demucs_v3].
