@@ -10,7 +10,7 @@ Session.vim
 /release
 /release_models
 /separated
-/tests
+# /tests
 /trash
 /misc
 /mdx

@@ -7,23 +7,40 @@
 
 import torch as th
 from .istft import ISTFT
+from .stft_process import STFT_Process
 
 
-def spectro(x, n_fft=512, hop_length=None, pad=0):
+def spectro(x, n_fft=512, hop_length=None, pad=0, stft_type='pytorch'):
+    """ Compute STFT of the input signal """
     *other, length = x.shape
     x = x.reshape(-1, length)
     is_mps_xpu = x.device.type in ['mps', 'xpu']
     if is_mps_xpu:
         x = x.cpu()
-    z = th.stft(x,
-                n_fft * (1 + pad),
-                hop_length or n_fft // 4,
-                window=th.hann_window(n_fft).to(x),
-                win_length=n_fft,
-                normalized=True,
-                center=True,
-                return_complex=False,
-                pad_mode='reflect') # Now z will return 1 more dimension - last dimension will be 2 now
+
+    if stft_type == 'pytorch':
+        z = th.view_as_real(
+            th.stft(x,
+                    n_fft * (1 + pad),
+                    hop_length or n_fft // 4,
+                    window=th.hann_window(n_fft).to(x),
+                    win_length=n_fft,
+                    normalized=True,
+                    center=True,
+                    return_complex=True,
+                    pad_mode='reflect') # Now z will return 1 more dimension - last dimension will be 2 now
+            )
+
+    elif stft_type == 'custom':
+        z = STFT_Process(
+            model_type='stft_B',
+            n_fft=n_fft * (1 + pad),
+            hop_len=hop_length or n_fft // 4,
+            max_frames=length,
+            window_type='hann',
+            normalized=True
+        )(x.view(-1, 1, length))
+
     _, freqs, frame, dim = z.shape
     assert dim == 2, "STFT should return complex numbers"
 
